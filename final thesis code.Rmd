@@ -1,0 +1,822 @@
+---
+title: "Thesis code"
+author: "Suzanne Snel"
+date: "6/10/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Set-up
+
+Load packages
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library("ggplot2")
+library("MASS")
+library("dplyr")
+library("rvest")
+library("httr")
+library("stringr")
+library("purrr")
+library("jsonlite")
+library("ndjson")
+library("lubridate")
+#library("qdap")
+library("tidytext")
+library(RCurl)
+library(XML)
+library(stringr)
+library(rvest)
+library(dplyr)
+library(httr)
+library(GGally)
+library(leaps)
+library(Rcrawler)
+library("neuralnet")
+library("quanteda")
+library("caret")
+library("glmnet")
+library("mgcv")
+library("cowplot")
+library(readxl)
+library("FWDselect")
+library("forcats")
+```
+
+Get links:
+```{r echo=TRUE}
+kickstarter_kaggle <- read.csv("ks-projects-201801.csv")
+kickstarter_kaggle <- filter(kickstarter_kaggle, main_category == "Technology")
+
+kickstarter_kaggle$ID <- kickstarter_kaggle$ID %>% as.character()
+kickstarter_kaggle$kickstarter_links_base <- "https://www.kickstarter.com/projects/"
+kickstarter_kaggle$link_addition <- paste(kickstarter_kaggle$kickstarter_links_base, kickstarter_kaggle$ID, sep = "") 
+kickstarter_kaggle$name_for_link <- kickstarter_kaggle$name %>% str_replace_all(" - ", " ") %>% str_replace_all("-", " ") %>% str_replace_all("™", "tm") %>%
+  str_replace_all(":", "") %>% str_replace_all("'", "") %>% str_replace_all("\\(", "") %>% str_replace_all("\\)", "") %>% str_replace_all("\"", "") %>%
+  str_replace_all("/", "") %>% str_replace_all("\\|", "") %>% str_replace_all("  ", " ") %>% str_replace_all("   ", " ") %>% str_replace_all("    ", " ") %>%
+  str_replace_all("&", "and") %>% str_replace_all("\\.", "") %>% str_replace_all("\\$", "") %>% str_replace_all("!", "") %>% str_replace_all(",", "") %>% str_replace_all("~", "") %>% 
+  str_replace_all("®", "") %>% str_replace_all("°", "") %>% str_replace_all("@", "") %>% str_replace_all("#", "") %>% str_replace_all("%", "") %>% 
+  str_replace_all("\\^", " ") %>% str_replace_all("\\*", " ") %>% str_replace_all("_", " ") %>% str_replace_all("=", "") %>% str_replace_all("\\+", " ") %>%
+  str_replace_all("\\?", "") %>% str_replace_all(" ", "-") %>% str_replace_all("--", "-") %>% str_replace_all("---", "-")  %>% str_replace_all("--", "-")
+kickstarter_kaggle$name_for_link <- substr(kickstarter_kaggle$name_for_link, 1, 50)
+kickstarter_kaggle$link <- paste(kickstarter_kaggle$link_addition, kickstarter_kaggle$name_for_link, sep = "/")
+
+kickstarter_df <- dplyr::select(kickstarter_kaggle, ID, link, usd_goal_real) %>% as_tibble
+summary_statistics <- function(u) { 
+  summarise(kickstarter_df, Count = length(u),
+            Missing = (sum(is.na(u)))/length(u),
+            Cardinality = length(unique(u)),
+            Min. = min(u, na.rm = TRUE),
+            First_Quantile = quantile(u, 0.25, na.rm = TRUE),
+            Mean = mean(u, na.rm = TRUE),
+            Median = median(u, na.rm = TRUE),
+            Third_Quantile = quantile(u, 0.75, na.rm = TRUE),
+            Max. = max(u, na.rm = TRUE),
+            SD = sd(u, na.rm = TRUE)
+  )}
+summary_statistics(kickstarter_df$usd_goal_real)
+
+kickstarter_df <- filter(kickstarter_df, usd_goal_real >= 5673.89, usd_goal_real <= 50000)
+```
+
+Save webpages:
+```{r eval=FALSE, include=FALSE}
+for (i in seq_along(kickstarter_df$link)){
+  tryCatch({
+     page <- read_html(kickstarter_df$link[i])
+     Sys.sleep(0.5)
+     write_html(page, paste0("webpages thesis/project", i, ".html"))
+     }, error=function(e){})}
+```
+
+Webscraping function for variables:
+```{r}
+Text_Variables <- function(x) {
+  
+  #Find description
+  description1 <- xml_find_all(x, "//*[@id='content-wrap']/div/section[1]/div/div/div/div/div[1]/div/p") %>% html_text()
+  description1
+  #Find wordcount
+  text_df <- data_frame(linenumber = row_number(description1), text = description1)
+  text_df_df <- text_df %>% unnest_tokens(word, text)
+  text_df_df
+  Wordcount <- count(text_df_df) %>% as.numeric()
+  
+  #Clean description for sentiment analysis
+  data("stop_words")
+  text_without_stopwords <- text_df_df %>% anti_join(stop_words)
+  text_without_stopwords
+  Wordcount_without_stopwords <- text_without_stopwords %>% count() %>% as.numeric()
+  Prop_non_stop_words <- Wordcount_without_stopwords / Wordcount
+  
+  #Emotionality: Joy
+  NRC_joy <- get_sentiments("nrc") %>% filter(sentiment == "joy")
+  sentiment_joy <- text_without_stopwords %>% inner_join(NRC_joy)
+  Joy <- count(sentiment_joy) %>% as.numeric()
+  
+  #Emotionality: Anger
+  NRC_anger <- get_sentiments("nrc") %>% filter(sentiment == "anger")
+  sentiment_anger <- text_without_stopwords %>% inner_join(NRC_anger)
+  sentiment_anger
+  Anger <- count(sentiment_anger) %>% as.numeric()
+  
+  #Emotionality: Anticipation
+  NRC_anticipation <- get_sentiments("nrc") %>% filter(sentiment == "anticipation")
+  sentiment_anticipation <- text_without_stopwords %>% inner_join(NRC_anticipation)
+  sentiment_anticipation
+  Anticipation <- count(sentiment_anticipation) %>% as.numeric()
+  
+  #Emotionality: disgust
+  NRC_disgust <- get_sentiments("nrc") %>% filter(sentiment == "disgust")
+  sentiment_disgust <- text_without_stopwords %>% inner_join(NRC_disgust)
+  sentiment_disgust
+  Disgust <- count(sentiment_disgust) %>% as.numeric()
+  
+  #Emotionality: fear
+  NRC_fear <- get_sentiments("nrc") %>% filter(sentiment == "fear")
+  sentiment_fear <- text_without_stopwords %>% inner_join(NRC_fear)
+  sentiment_fear
+  Fear <- count(sentiment_fear) %>% as.numeric()
+  
+  #Emotionality: sadness
+  NRC_sadness <- get_sentiments("nrc") %>% filter(sentiment == "sadness")
+  sentiment_sadness <- text_without_stopwords %>% inner_join(NRC_sadness)
+  sentiment_sadness
+  Sadness <- count(sentiment_sadness) %>% as.numeric()
+  
+  #Emotionality: surprise
+  NRC_surprise <- get_sentiments("nrc") %>% filter(sentiment == "surprise")
+  sentiment_surprise <- text_without_stopwords %>% inner_join(NRC_surprise)
+  sentiment_surprise
+  Surprise <- count(sentiment_surprise) %>% as.numeric()
+  
+  #Emotionality: trust
+  NRC_trust <- get_sentiments("nrc") %>% filter(sentiment == "trust")
+  sentiment_trust <- text_without_stopwords %>% inner_join(NRC_trust)
+  sentiment_trust
+  Trust <- count(sentiment_trust) %>% as.numeric()
+  
+  #Emotionality: positive
+  NRC_positive <- get_sentiments("nrc") %>% filter(sentiment == "positive")
+  sentiment_positive <- text_without_stopwords %>% inner_join(NRC_positive)
+  sentiment_positive
+  Positive <- count(sentiment_positive) %>% as.numeric()
+  
+  #Emotionality: negative
+  NRC_negative <- get_sentiments("nrc") %>% filter(sentiment == "negative")
+  sentiment_negative <- text_without_stopwords %>% inner_join(NRC_negative)
+  sentiment_negative
+  Negative <- count(sentiment_negative) %>% as.numeric()
+  
+  #Polarity
+  afinn <- text_without_stopwords %>% inner_join(get_sentiments("afinn")) %>% 
+    summarise(sentiment = sum(score))
+  afinn <- as.numeric(afinn)
+  
+  #Clean data for readability
+  readability_df <- paste(unlist(text_df), collapse =" ")
+  Readability_scores <- quanteda::textstat_readability(readability_df, "Flesch.Kincaid") %>% as.numeric()
+  Readability <- Readability_scores[2]
+  
+  #Find headline
+  headline <- xml_find_all(x, "//*[@id='content-wrap']/section/div[2]/div[1]/h2/span/a") %>% html_text()
+  headline_df <- data_frame(linenumber = row_number(headline), text = headline)
+  headline_df_df <- headline_df %>% unnest_tokens(word, text)
+  Hl_Wordcount1 <- count(headline_df_df) %>% as.numeric()
+  if (Hl_Wordcount1 > 0) { Hl_Wordcount <- Hl_Wordcount1 
+  } else if (Hl_Wordcount1 == 0) {
+    headline1 <- xml_find_all(x, "//*[@id='content-wrap']/section/div/div[2]/div/div/div[3]/h2") %>% html_text()
+    headline_df1 <- data_frame(linenumber = row_number(headline1), text = headline1)
+    headline_df_df1 <- headline_df1 %>% unnest_tokens(word, text)
+    Hl_Wordcount <- count(headline_df_df1) %>% as.numeric()}
+  
+  #Positive words headline
+  if (Hl_Wordcount1 > 0) {
+    hl_without_stopwords <- headline_df_df %>% anti_join(stop_words)
+    Hl_sentiment_positive <- hl_without_stopwords %>% inner_join(NRC_positive)
+    Hl_Positive <- count(Hl_sentiment_positive) %>% as.numeric()
+  } else if (Hl_Wordcount1 == 0) {
+    headline1 <- xml_find_all(x, "//*[@id='content-wrap']/section/div/div[2]/div/div/div[3]/h2") %>% html_text()
+    headline_df1 <- data_frame(linenumber = row_number(headline1), text = headline1)
+    headline_df_df1 <- headline_df1 %>% unnest_tokens(word, text)
+    hl_without_stopwords <- headline_df_df1 %>% anti_join(stop_words)
+    Hl_sentiment_positive <- hl_without_stopwords %>% inner_join(NRC_positive)
+    Hl_Positive <- count(Hl_sentiment_positive) %>% as.numeric()
+  }
+  
+  #Negative words headline
+  if (Hl_Wordcount1 > 0) {
+    hl_without_stopwords <- headline_df_df %>% anti_join(stop_words)
+    Hl_sentiment_negative <- hl_without_stopwords %>% inner_join(NRC_negative)
+    Hl_Negative <- count(Hl_sentiment_negative) %>% as.numeric()
+  } else if (Hl_Wordcount1 == 0) {
+    headline1 <- xml_find_all(x, "//*[@id='content-wrap']/section/div/div[2]/div/div/div[3]/h2") %>% html_text()
+    headline_df1 <- data_frame(linenumber = row_number(headline1), text = headline1)
+    headline_df_df1 <- headline_df1 %>% unnest_tokens(word, text)
+    hl_without_stopwords <- headline_df_df1 %>% anti_join(stop_words)
+    Hl_sentiment_negative <- hl_without_stopwords %>% inner_join(NRC_negative)
+    Hl_Negative <- count(Hl_sentiment_negative) %>% as.numeric()
+  }
+  
+  #Find nr. reward levels
+  rlevels1 <- xml_find_all(x, ".//li/div/h2") %>% html_text()
+  rlevels <- length(rlevels1)
+  
+  #Find costs of reward levels
+  rlevelscosts1 <- xml_find_all(x, "//*[@id='content-wrap']/div[2]/section[1]/div/div/div/div/div[2]/div[1]/div/ol/li/div[2]/h2") %>% html_text()
+  rlevelscosts2 <- str_replace_all(rlevelscosts1, "\nPledge €", "")
+  rlevelscosts3 <- str_replace_all(rlevelscosts2, ",", "")
+  rlevelscosts4 <- str_replace_all(rlevelscosts3, " or more\n\nAbout €[[:digit:]]{1,}\n\n", "")
+  rlevelscosts4
+  rlevels_df <- data_frame(cost = rlevelscosts4)
+  rlevels_df
+  Costrlevel1 <- rlevels_df$cost[1] %>% as.numeric()
+  Costrlevel1
+  Costrlevel2 <- rlevels_df$cost[2] %>% as.numeric()
+  Costrlevel3 <- rlevels_df$cost[3] %>% as.numeric()
+  Costrlevel4 <- rlevels_df$cost[4] %>% as.numeric()
+  Costrlevel5 <- rlevels_df$cost[5] %>% as.numeric()
+  Costrlevel6 <- rlevels_df$cost[6] %>% as.numeric()
+  Costrlevel7 <- rlevels_df$cost[7] %>% as.numeric()
+  Costrlevel8 <- rlevels_df$cost[8] %>% as.numeric()
+  Costrlevel9 <- rlevels_df$cost[9] %>% as.numeric()
+  Costrlevel10 <- rlevels_df$cost[10] %>% as.numeric()
+  
+  #Find goal
+  
+  goal1 <- xml_find_all(x, "//*[@id='content-wrap']/div[2]/section[1]/div/div/div/div/div[1]/div[1]/div/div[2]/div[1]/div/span") %>% html_text()
+  goal1_without_currency <- goal1 %>% str_replace("[€]", "") %>% str_replace("[$]", "") %>% str_replace("[¥]", "") %>% str_replace("£", "") %>% str_replace("US", "") %>% str_replace("S", "") %>%
+    str_replace("CA", "") %>% str_replace("MX", "") %>% str_replace("HK", "") %>% str_replace("AU", "") %>% str_replace("NZ", "") %>% str_replace("EK", "") %>% 
+    str_replace("CHF", "") %>% str_replace("DKK", "")
+  goal1_without_comma <- str_replace_all(goal1_without_currency, ",", "")
+  goal1_cleaned <- as.numeric(goal1_without_comma)
+  if (length(goal1_cleaned) > 0) {
+    goal <- goal1_cleaned 
+    } else if (length(goal1_cleaned) == 0) {
+    goal <- xml_find_all(x, "//*[@id='content-wrap']/section/div/div[3]/div/div/div[3]/div[1]/span[3]/span[1]") %>% html_text() %>% str_replace("[€]", "") %>%
+      str_replace("[$]", "") %>% str_replace("[¥]", "") %>% str_replace("£", "") %>% str_replace("US", "") %>% str_replace("S", "") %>%
+      str_replace("CA", "") %>% str_replace("MX", "") %>% str_replace("HK", "") %>% str_replace("AU", "") %>% str_replace("NZ", "") %>% str_replace("EK", "") %>% 
+      str_replace("CHF", "") %>% str_replace("DKK", "") %>% str_replace_all(",", "") %>% as.numeric()
+    } 
+  
+  if (length(goal) == 0) goal <- NA
+  
+  #Find pledged
+  pledged1 <- xml_find_first(x, ".//body/main/div/div/section/div/div/div/div/div/div/span") %>% html_text()
+  pledged1_without_currency <- pledged1 %>% str_replace("[€]", "") %>% str_replace("[$]", "") %>% str_replace("[¥]", "") %>% str_replace("£", "") %>% str_replace("US", "") %>% str_replace("S", "") %>%
+    str_replace("CA", "") %>% str_replace("MX", "") %>% str_replace("HK", "") %>% str_replace("AU", "") %>% str_replace("NZ", "") %>% str_replace("EK", "") %>% 
+    str_replace("CHF", "") %>% str_replace("DKK", "")
+  pledged1_without_comma <- str_replace_all(pledged1_without_currency, ",", "")
+  pledged1_without_comma
+  pledged1_cleaned <- as.numeric(pledged1_without_comma)
+  pledged1_cleaned
+  if (length(pledged1_cleaned) > 0) {
+    pledged <- pledged1_cleaned 
+    } else if (length(pledged1_cleaned) == 0) {
+    pledged <- xml_find_all(x, "//*[@id='content-wrap']/div[2]/section[1]/div/div/div/div/div[1]/div[1]/div[2]/div[2]/div[1]/h3/span") %>% html_text() %>% str_replace("[€]", "") %>% str_replace("[$]", "") %>% 
+      str_replace("[¥]", "") %>% str_replace("£", "") %>% str_replace("US", "") %>% str_replace("S", "") %>%
+      str_replace("CA", "") %>% str_replace("MX", "") %>% str_replace("HK", "") %>% str_replace("AU", "") %>% str_replace("NZ", "") %>% str_replace("EK", "") %>% 
+      str_replace("CHF", "") %>% str_replace("DKK", "") %>% str_replace_all(",", "") %>% as.numeric() }
+    
+  if (length(pledged) == 0) pledged <- NA
+  
+  
+  #Find success rate
+  success_rate <- pledged/goal*100
+  success_rate
+  
+  #Find nr of pictures
+  img1 <- xml_find_all(x, "//*[@id='content-wrap']/div/section[1]/div/div/div/div/div[1]/div//*/figure/img") %>% html_text()
+  img2 <- xml_find_all(x, "//*[@id='video-section']/img")
+  Images <- length(img1) + length(img2)
+  
+  #Find nr of videos
+  videos1 <- xml_find_all(x, ".//video") %>% html_text()
+  Videos <- length(videos1)
+  
+  #Find duration
+  Project_Duration <- xml_find_all(x, ".//div/div/div/p/time") %>% html_text
+  Project_Duration
+  Project_Duration2 <- str_replace_all(Project_Duration, "Feb ", "02/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Jan ", "01/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Mar ", "03/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Apr ", "04/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "May ", "05/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Jun ", "06/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Jul ", "07/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Agu ", "08/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Sep ", "09/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Oct ", "10/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Nov ", "11/")
+  Project_Duration2 <- str_replace_all(Project_Duration2, "Dec ", "12/")
+  Project_Duration3 <- str_replace_all(Project_Duration2, ", ", "/")
+  Project_Duration3 ##Month/day/year format
+  Project_Duration4 <- as.Date(Project_Duration3, format = "%m/%d/%Y")
+  Project_Duration4
+  dates_df <- data_frame(startdate = Project_Duration4[1], enddate = Project_Duration4[2])
+  dates_df
+  dates_df$date_diff <- as.Date(dates_df$enddate, format="%Y/%m/%d") - as.Date(dates_df$startdate, format="%Y/%m/%d")
+  dates_df$date_diff
+  
+  Project_Duration_Difference <- str_extract(dates_df$date_diff,"[[:digit:]]{1,}")
+  Duration <- Project_Duration_Difference %>% as.numeric()
+  
+  #find created & backed
+  page_creator <- xml_find_all(x, "//*[@id='content-wrap']/section/div/div[2]/div/div/div[2]/span[1]/a") %>% html_attr("href") 
+  
+  if (length(page_creator) > 0) {
+    page_creator1 <- paste("https://www.kickstarter.com", page_creator, sep = "")
+    page_creator2 <- read_html(page_creator1)
+    created1 <- xml_find_all(page_creator2, "//*[@id='bio']/div/div[2]/div[4]")
+    created_backed <- created1 %>% html_text() %>% str_replace_all("\n", "") %>% str_split("·") 
+    Created <- created_backed[[1]][1] %>% str_replace_all("First", "1") %>% str_replace_all(" created", "")
+    Backed <- created_backed[[1]][2] %>% str_replace_all(" backed", "")
+  } else if (length(page_creator) == 0) {
+    page_creator_v2 <- xml_find_all(x, "//*[@id='content-wrap']/section/div[2]/div[2]/div/div/div[2]/div[3]/div[2]/div[1]/div/div[2]/div[1]/a") %>% html_attr("href") 
+    page_creator1_v2 <- paste("https://www.kickstarter.com", page_creator_v2, sep = "")
+    page_creator2_v2 <- read_html(page_creator1_v2)
+    created1_v2 <- xml_find_all(page_creator2_v2, "//*[@id='bio']/div/div[2]/div[4]")
+    created_backed_v2 <- created1_v2 %>% html_text() %>% str_replace_all("\n", "") %>% str_split("·") 
+    Created <- created_backed_v2[[1]][1] %>% str_replace_all("First", "1") %>% str_replace_all(" created", "")
+    Backed <- created_backed_v2[[1]][2] %>% str_replace_all(" backed", "")
+  }
+
+  
+  
+  return(data.frame(Wordcount, Joy, Anger, Anticipation, Disgust, Fear, Sadness, Surprise, Trust, Positive, Negative, Readability, Hl_Wordcount, Hl_Positive, Hl_Negative, rlevels, 
+                    success_rate, Images, Videos, Duration, afinn, Prop_non_stop_words, Backed, Created))
+}
+```
+
+Load webpages from file
+```{r warning=FALSE}
+pages <- vector(length = length(kickstarter_df$link), mode = "list")
+
+for (i in seq_along(kickstarter_df$link)) {
+  tryCatch({
+   page <- read_html(paste0("webpages thesis/project", i, ".html"))
+   pages[[i]] <- Text_Variables(page)
+   }, error=function(e){return(NA)})}
+
+df <- do.call(rbind, pages)
+df <- df %>% as_tibble
+
+df$Backed <- df$Backed %>% as.numeric()
+df$Created <- df$Created %>% as.numeric()
+
+```
+
+Quality report 1:
+```{r}
+summary_statistics <- function(u) { 
+  summarise(df, Count = length(u),
+            Missing = (sum(is.na(u)))/length(u),
+            Cardinality = length(unique(u)),
+            Min. = min(u, na.rm = TRUE),
+            First_Quantile = quantile(u, 0.25, na.rm = TRUE),
+            Mean = mean(u, na.rm = TRUE),
+            Median = median(u, na.rm = TRUE),
+            Third_Quantile = quantile(u, 0.75, na.rm = TRUE),
+            Max. = max(u, na.rm = TRUE),
+            SD = sd(u, na.rm = TRUE)
+  )}
+
+quality_report <- rbind(summary_statistics(df$Wordcount),
+                        summary_statistics(df$Joy), summary_statistics(df$Anger), summary_statistics(df$Anticipation), summary_statistics(df$Disgust),
+                        summary_statistics(df$Fear), summary_statistics(df$Sadness), summary_statistics(df$Surprise),
+                        summary_statistics(df$Trust), summary_statistics(df$Positive), summary_statistics(df$Negative), summary_statistics(df$Readability), 
+                        summary_statistics(df$Hl_Wordcount), summary_statistics(df$Hl_Positive), summary_statistics(df$Hl_Negative), 
+                        summary_statistics(df$rlevels), summary_statistics(df$success_rate), summary_statistics(df$Images), 
+                        summary_statistics(df$Videos), summary_statistics(df$Duration),
+                        summary_statistics(df$afinn), summary_statistics(df$Prop_non_stop_words), summary_statistics(df$Backed), summary_statistics(df$Created)
+                        )
+quality_report_vars <- dplyr::select(df, Wordcount:Created)
+quality_report$Variables <- colnames(quality_report_vars)
+quality_report <- dplyr::select(quality_report, Variables, everything())
+colnames(quality_report) <- c("Variables", "Count", "% Missing", "Cardinality", "Min.", "1st Quartile", "Mean", "Median", "3rd Quartile", "Max.", "Std. Dev.")
+print(quality_report)
+```
+
+Remove missing values:
+```{r}
+df_cleaned <- filter(df, !is.na(Duration), !is.na(Backed), !is.na(success_rate))
+df_cleaned$afinn <- NULL
+ggcorr(df_cleaned[1:23])
+```
+
+Quality report 2:
+```{r}
+summary_statistics <- function(u) { 
+  summarise(df_cleaned, Count = length(u),
+            Missing = (sum(is.na(u)))/length(u),
+            Cardinality = length(unique(u)),
+            Min. = min(u, na.rm = TRUE),
+            First_Quantile = quantile(u, 0.25, na.rm = TRUE),
+            Mean = mean(u, na.rm = TRUE),
+            Median = median(u, na.rm = TRUE),
+            Third_Quantile = quantile(u, 0.75, na.rm = TRUE),
+            Max. = max(u, na.rm = TRUE),
+            SD = sd(u, na.rm = TRUE)
+  )}
+quality_report <- rbind(summary_statistics(df_cleaned$Wordcount),
+                        summary_statistics(df_cleaned$Joy), summary_statistics(df_cleaned$Anger), summary_statistics(df_cleaned$Anticipation), summary_statistics(df_cleaned$Disgust),
+                        summary_statistics(df_cleaned$Fear), summary_statistics(df_cleaned$Sadness), summary_statistics(df_cleaned$Surprise),
+                        summary_statistics(df_cleaned$Trust), summary_statistics(df_cleaned$Positive), summary_statistics(df_cleaned$Negative), summary_statistics(df_cleaned$Readability), 
+                        summary_statistics(df_cleaned$Hl_Wordcount), summary_statistics(df_cleaned$Hl_Positive), summary_statistics(df_cleaned$Hl_Negative), 
+                        summary_statistics(df_cleaned$rlevels), summary_statistics(df_cleaned$success_rate), summary_statistics(df_cleaned$Images), 
+                        summary_statistics(df_cleaned$Videos), summary_statistics(df_cleaned$Duration),
+                        summary_statistics(df_cleaned$Prop_non_stop_words), summary_statistics(df_cleaned$Backed), summary_statistics(df_cleaned$Created))
+quality_report_vars <- dplyr::select(df_cleaned, Wordcount:Created)
+quality_report$Variables <- colnames(quality_report_vars)
+quality_report <- dplyr::select(quality_report, Variables, everything())
+colnames(quality_report) <- c("Variables", "Count", "% Missing", "Cardinality", "Min.", "1st Quartile", "Mean", "Median", "3rd Quartile", "Max.", "Std. Dev.")
+print(quality_report)
+```
+
+Transform DV:
+```{r}
+ggplot(df_cleaned, aes(x = success_rate)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(success_rate)), colour = "yellow")
+
+success_rate1 <- vector(length = length(df_cleaned$success_rate), mode = "list")
+
+for (row in 1:nrow(df_cleaned)) {
+success_rate <- df_cleaned[row, "success_rate"]
+  if (success_rate < 0.01) {success_rate1[[row]] <- 0.01
+} else {success_rate1[[row]] <- success_rate}}
+
+success_rate_df <- do.call(rbind, success_rate1)  %>% as.data.frame()
+df_cleaned$success_rate <- success_rate_df$success_rate
+  
+df_cleaned$success_rate_log <- log(df_cleaned$success_rate)
+
+ggplot(df_cleaned, aes(x = success_rate_log)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(success_rate_log)), colour = "yellow")
+```
+
+Compute proportions of emotions:
+```{r}
+df_cleaned$Joy_prop <- df_cleaned$Joy / df_cleaned$Wordcount
+df_cleaned$Anger_prop <- df_cleaned$Anger / df_cleaned$Wordcount
+df_cleaned$Anticipation_prop <- df_cleaned$Anticipation / df_cleaned$Wordcount
+df_cleaned$Disgust_prop <- df_cleaned$Disgust / df_cleaned$Wordcount
+df_cleaned$Fear_prop <- df_cleaned$Fear / df_cleaned$Wordcount
+df_cleaned$Sadness_prop <- df_cleaned$Sadness / df_cleaned$Wordcount
+df_cleaned$Surprise_prop <- df_cleaned$Surprise / df_cleaned$Wordcount
+df_cleaned$Trust_prop <- df_cleaned$Trust / df_cleaned$Wordcount
+df_cleaned$Prop_pos_words <- df_cleaned$Positive / df_cleaned$Wordcount
+df_cleaned$Prop_neg_words <- df_cleaned$Negative / df_cleaned$Wordcount
+df_cleaned$Hl_prop_pos_words <- df_cleaned$Hl_Positive / df_cleaned$Wordcount
+df_cleaned$Hl_prop_neg_words <- df_cleaned$Hl_Negative / df_cleaned$Wordcount
+```
+
+```{r}
+Hl_pos <- vector(length = length(df_cleaned$Hl_prop_pos_words), mode = "list")
+for(row in 1:nrow(df_cleaned)) {
+  Hl_prop_pos_words <- df_cleaned[row, "Hl_prop_pos_words"]
+  if (Hl_prop_pos_words > 0) {Hl_pos[[row]] <- "yes"
+  } else {Hl_pos[[row]] <- "no"}
+  
+}
+Hl_pos_df <- do.call(rbind, Hl_pos) %>% as.data.frame()
+colnames(Hl_pos_df) <- c("Hl_pos")
+
+Hl_neg <- vector(length = length(df_cleaned$Hl_prop_neg_words), mode = "list")
+for(row in 1:nrow(df_cleaned)) {
+  Hl_prop_neg_words <- df_cleaned[row, "Hl_prop_neg_words"]
+  if (Hl_prop_neg_words > 0) {Hl_neg[[row]] <- "yes"
+  } else {Hl_neg[[row]] <- "no"}
+  
+}
+Hl_neg_df <- do.call(rbind, Hl_neg) %>% as.data.frame()
+colnames(Hl_neg_df) <- c("Hl_neg")
+
+df_cleaned <- cbind(df_cleaned, Hl_pos_df, Hl_neg_df)
+
+```
+
+
+Final dataframe:
+```{r}
+df_final <- dplyr::select(df_cleaned, Wordcount, Images, Videos, Prop_non_stop_words, Prop_pos_words, Prop_neg_words, Joy_prop, Anger_prop, Anticipation_prop, Disgust_prop, Fear_prop, Sadness_prop, Surprise_prop, Trust_prop, Readability, Hl_Wordcount, Hl_pos, Hl_neg, Duration, rlevels, Backed, Created, success_rate, success_rate_log) 
+df_final <- df_final %>% as_tibble()
+```
+
+Check correlations:
+```{r}
+ggcorr(df_final[1:24])
+```
+
+Quality report final dataframe: 
+
+```{r}
+summary_statistics <- function(u) { 
+  summarise(df_final, Count = length(u),
+            Missing = (sum(is.na(u)))/length(u),
+            Cardinality = length(unique(u)),
+            Min. = min(u, na.rm = TRUE),
+            First_Quantile = quantile(u, 0.25, na.rm = TRUE),
+            Mean = mean(u, na.rm = TRUE),
+            Median = median(u, na.rm = TRUE),
+            Third_Quantile = quantile(u, 0.75, na.rm = TRUE),
+            Max. = max(u, na.rm = TRUE),
+            SD = sd(u, na.rm = TRUE)
+  )}
+quality_report <- rbind(summary_statistics(df_final$Wordcount),
+                        summary_statistics(df_final$Images), summary_statistics(df_final$Videos), summary_statistics(df_final$Prop_non_stop_words), summary_statistics(df_final$Prop_pos_words),
+                        summary_statistics(df_final$Prop_neg_words), summary_statistics(df_final$Joy_prop), summary_statistics(df_final$Anger_prop),
+                        summary_statistics(df_final$Anticipation_prop), summary_statistics(df_final$Disgust_prop), summary_statistics(df_final$Fear_prop), summary_statistics(df_final$Sadness_prop), 
+                        summary_statistics(df_final$Surprise_prop), summary_statistics(df_final$Trust_prop), summary_statistics(df_final$Readability), 
+                        summary_statistics(df_final$Hl_Wordcount), 
+                        summary_statistics(df_final$Duration), summary_statistics(df_final$rlevels),
+                        summary_statistics(df_final$Backed), summary_statistics(df_final$Created), summary_statistics(df_final$success_rate), summary_statistics(df_final$success_rate_log))
+quality_report_vars <- dplyr::select(df_final, Wordcount:Hl_Wordcount, Duration:success_rate_log)
+quality_report$Variables <- colnames(quality_report_vars)
+quality_report <- dplyr::select(quality_report, Variables, everything())
+colnames(quality_report) <- c("Variables", "Count", "% Missing", "Cardinality", "Min.", "1st Quartile", "Mean", "Median", "3rd Quartile", "Max.", "Std. Dev.")
+print(quality_report)
+```
+
+plot final vars:
+```{r}
+ggplot(df_final, aes(x = Wordcount)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Wordcount)), colour = "yellow")
+ggplot(df_final, aes(x = Prop_non_stop_words)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Prop_non_stop_words)), colour = "yellow")
+ggplot(df_final, aes(x = Hl_Wordcount)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Hl_Wordcount)), colour = "yellow")
+ggplot(df_final, aes(x = Prop_pos_words)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Prop_pos_words)), colour = "yellow")
+ggplot(df_final, aes(x = Prop_neg_words)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Prop_neg_words)), colour = "yellow")
+ggplot(df_final, aes(x = Hl_pos)) + geom_bar()
+ggplot(df_final, aes(x = Hl_neg)) + geom_bar()
+ggplot(df_final, aes(x = Joy_prop)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Joy_prop)), colour = "yellow")
+ggplot(df_final, aes(x = Anger_prop)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Anger_prop)), colour = "yellow")
+ggplot(df_final, aes(x = Anticipation_prop)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Anticipation_prop)), colour = "yellow")
+ggplot(df_final, aes(x = Disgust_prop)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Disgust_prop)), colour = "yellow")
+ggplot(df_final, aes(x = Fear_prop)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Fear_prop)), colour = "yellow")
+ggplot(df_final, aes(x = Sadness_prop)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Sadness_prop)), colour = "yellow")
+ggplot(df_final, aes(x = Surprise_prop)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Surprise_prop)), colour = "yellow")
+ggplot(df_final, aes(x = Trust_prop)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Trust_prop)), colour = "yellow")
+ggplot(df_final, aes(x = Readability)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Readability)), colour = "yellow")
+ggplot(df_final, aes(x = Images)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Images)), colour = "yellow")
+ggplot(df_final, aes(x = Videos)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Videos)), colour = "yellow")
+ggplot(df_final, aes(x = rlevels)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(rlevels)), colour = "yellow")
+ggplot(df_final, aes(x = Duration)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Duration)), colour = "yellow")
+ggplot(df_final, aes(x = Created)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Created)), colour = "yellow")
+ggplot(df_final, aes(x = Backed)) + geom_histogram(bins = 15, fill = "black") + geom_vline(aes(xintercept=mean(Backed)), colour = "yellow")
+```
+
+Plots with log var of success:
+```{r}
+ggplot(df_final, aes(y = success_rate_log, x = Wordcount)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Prop_non_stop_words)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Hl_Wordcount)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Prop_pos_words)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Prop_neg_words)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Joy_prop)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Anger_prop)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Anticipation_prop)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Disgust_prop)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Fear_prop)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Sadness_prop)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Surprise_prop)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Trust_prop)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Readability)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Images)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Videos)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = rlevels)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Duration)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Created)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Backed)) + geom_point() + geom_smooth() + theme(text = element_text(size=20))
+
+ggplot(df_final, aes(y = success_rate_log, x = Hl_pos)) + geom_boxplot() + theme(text = element_text(size=20))
+ggplot(df_final, aes(y = success_rate_log, x = Hl_neg)) + geom_boxplot() + theme(text = element_text(size=20))
+```
+
+
+Train/validate/test split:
+```{r}
+set.seed(3)
+train_ind <- createDataPartition(df_final$success_rate_log, p = 0.8)
+df_train <- df_final %>% slice(train_ind$Resample1)
+df_test <- df_final %>% slice(-train_ind$Resample1)
+set.seed(4)
+train_ind_forvalidation <- createDataPartition(df_train$success_rate_log, p = 0.75)
+df_train_train <- df_train %>% slice(train_ind_forvalidation$Resample1)
+df_train_validate <- df_train %>% slice(-train_ind_forvalidation$Resample1)
+```
+
+Basic modelling:
+```{r}
+train_baseline_gam <- gam(success_rate_log ~ s(Images) + s(Videos) +
+                            s(Duration) + s(rlevels) + s(Created) + s(Backed), data = df_train_train)
+train_text_mining_gam <- gam(success_rate_log ~ s(Wordcount) + s(Prop_non_stop_words) + s(Hl_Wordcount) + s(Prop_pos_words) + s(Prop_neg_words) + 
+                               Hl_pos + Hl_neg + s(Joy_prop) + s(Anger_prop) + s(Anticipation_prop) + s(Disgust_prop) + s(Fear_prop) +
+                               s(Sadness_prop) + s(Surprise_prop) + s(Trust_prop) + s(Readability), data = df_train_train)
+train_all_gam <- gam(success_rate_log ~ s(Wordcount) + s(Prop_non_stop_words) + s(Hl_Wordcount) + s(Prop_pos_words) + s(Prop_neg_words) + 
+                                              Hl_pos + Hl_neg + s(Joy_prop) + s(Anger_prop) + s(Anticipation_prop) + s(Disgust_prop) + s(Fear_prop) +
+                                              s(Sadness_prop) + s(Surprise_prop) + s(Trust_prop) + s(Readability) + 
+                                              s(Images) + s(Videos) +
+                                              s(Duration) + s(rlevels) + s(Created) + s(Backed), data = df_train_train)
+summary(train_baseline_gam)
+summary(train_text_mining_gam)
+summary(train_all_gam)
+
+preds_baseline_gam <- predict.gam(train_baseline_gam, newdata = df_train_validate)
+preds_text_gam <- predict.gam(train_text_mining_gam, newdata = df_train_validate)
+preds_all_gam <- predict.gam(train_all_gam, newdata = df_train_validate)
+
+rsme_baseline_gam <- sqrt(mean((preds_baseline_gam - df_train_validate$success_rate_log)^2))
+rsme_text_gam <- sqrt(mean((preds_text_gam - df_train_validate$success_rate_log)^2))
+rsme_all_gam <- sqrt(mean((preds_all_gam - df_train_validate$success_rate_log)^2))
+?gam
+rsme_baseline_gam
+rsme_text_gam
+rsme_all_gam
+
+train_baseline_gam$aic
+train_text_mining_gam$aic
+train_all_gam$aic
+
+exp(2.33)
+
+```
+
+
+Feature selection for Multiple Linear Regression:
+```{r}
+best_leaps <- regsubsets(success_rate_log ~ Wordcount + Images + Videos + Prop_non_stop_words + Prop_pos_words + Prop_neg_words + Joy_prop + Anger_prop + Anticipation_prop + Disgust_prop + Fear_prop +
+                           Sadness_prop + Surprise_prop + Trust_prop + Readability + Hl_Wordcount + Hl_pos + Hl_neg + Duration + rlevels + Backed + Created, 
+                         data = df_train_train, nvmax = 7, method = "exhaustive")
+leaps_summary <- summary(best_leaps)
+leaps_summary
+names(leaps_summary)
+
+```
+
+Determine nr. variables based on cross validation:
+```{r}
+k=10
+set.seed(22)
+folds=sample(1:k,nrow(df_train_train),replace=TRUE)
+cv.errors=matrix(NA,k,22, dimnames=list(NULL, paste(1:22)))
+
+predict.regsubsets = function (object ,newdata ,id ,...){
+  form=as.formula(object$call [[2]])
+  mat=model.matrix(form,newdata)
+  coefi=coef(object ,id=id)
+  xvars=names(coefi)
+  mat[,xvars]%*%coefi}
+
+for(j in 1:k){
+  best.fit = regsubsets(success_rate_log ~ ., data = df_train_train[folds != j,], nvmax = 22, method = "exhaustive")
+  for (i in 1:22){
+    pred = predict(best.fit, df_train_train[folds == j,], id=i)
+    cv.errors[j,i] = mean((df_train_train$success_rate_log[folds == j]- pred)^2)
+  }
+}
+
+mean.cv.errors=apply(cv.errors,2,mean) 
+mean.cv.errors  
+par(mfrow=c(1,1))
+plot(mean.cv.errors ,type="b", main="Cross-validation errors for models with k variables", xlab="Variables", ylab="Cross-validation error") #9 variables!
+?plot
+
+coef(best_leaps, 7)
+```
+
+General linear model with best features:
+```{r}
+Lm_fit <- lm(success_rate_log ~ Wordcount + Images + Videos + Hl_Wordcount + rlevels + Backed + Hl_pos, 
+             data = df_train_train)
+summary_lm <- summary(Lm_fit)
+preds_lm <- predict(Lm_fit, newdata = df_train_validate)
+rsme_lm <- sqrt(mean((preds_lm - df_train_validate$success_rate_log)^2))
+rsme_lm
+summary_lm
+
+```
+
+Feature selection for GAM model:
+```{r}
+x <- df_train_train[ ,1:22] %>% as.data.frame
+y <- df_train_train[ ,24] %>% as.matrix()
+gam_select <- qselection(x, y, qvector = c(1:21), method = "gam", criterion = "aic", cluster= TRUE)
+gam_select$aic
+plot(gam_select$aic, type="b", main="AIC for models with k variables", xlab="Variables", ylab="AIC")
+which.min(gam_select$aic)
+gam_select$selection
+
+### GAM
+mod_gam <- gam(success_rate_log ~ s(Images) + s(rlevels) + s(Videos) + s(Backed) + s(Duration) + 
+                                              s(Hl_Wordcount) + s(Anger_prop) + s(Anticipation_prop) + s(Surprise_prop) + s(Prop_non_stop_words) + s(Trust_prop) +
+                                              s(Wordcount) + 
+                                              s(Fear_prop) + Hl_pos, data = df_train_train)
+preds_gam <- predict.gam(mod_gam, newdata = df_train_validate)
+rsme_gam <- sqrt(mean((preds_gam - df_train_validate$success_rate_log)^2))
+rsme_gam
+summary(mod_gam)
+
+par(mfrow=c(1,3))
+plot(mod_gam, se=TRUE, col="red")
+
+##### Optimize GAM
+gam_mod1 <- gam(success_rate_log ~ s(Images) + s(rlevels) + s(Videos) + s(Backed) + s(Duration) + 
+                                              s(Hl_Wordcount) + s(Anger_prop) + s(Anticipation_prop) + s(Surprise_prop) + s(Prop_non_stop_words) + s(Trust_prop) +
+                                              s(Wordcount) + 
+                                              s(Fear_prop) + Hl_pos, data = df_train_train)
+gam_mod2 <- gam(success_rate_log ~ s(Images) + s(rlevels) + s(Videos) + s(Backed) + s(Duration) + 
+                                              s(Hl_Wordcount) + s(Anger_prop) + s(Anticipation_prop) + s(Surprise_prop) + s(Prop_non_stop_words) + Trust_prop +
+                                              s(Wordcount) + 
+                                              s(Fear_prop) + Hl_pos, data = df_train_train)
+gam_mod3 <- gam(success_rate_log ~ s(Images) + s(rlevels) + s(Videos) + s(Backed) + s(Duration) + 
+                                              s(Hl_Wordcount) + s(Anger_prop) + s(Anticipation_prop) + s(Surprise_prop) + s(Prop_non_stop_words) +
+                                              s(Wordcount) + 
+                                              s(Fear_prop) + Hl_pos, data = df_train_train)
+anova(gam_mod1,gam_mod2,gam_mod3,test="F")
+
+##### Results optimized GAM
+mod_gam_opt <- gam(success_rate_log ~ s(Images) + s(rlevels) + s(Videos) + s(Backed) + s(Duration) + 
+                                              s(Hl_Wordcount) + s(Anger_prop) + s(Anticipation_prop) + s(Surprise_prop) + s(Prop_non_stop_words) + Trust_prop +
+                                              s(Wordcount) + 
+                                              s(Fear_prop) + Hl_pos, data = df_train_train)
+preds_gam_opt <- predict.gam(mod_gam_opt, newdata = df_train_validate)
+rsme_gam_opt <- sqrt(mean((preds_gam_opt - df_train_validate$success_rate_log)^2))
+rsme_gam_opt
+summary(mod_gam_opt)
+
+par(mfrow=c(1,3))
+plot(mod_gam_opt, se=TRUE, col="red")
+
+```
+
+On test set:
+```{r}
+# Train final model on whole training set
+mod_final <- train_baseline_gam <- gam(success_rate_log ~ s(Images) + s(Videos) +
+                            s(Duration) + s(rlevels) + s(Created) + s(Backed), data = df_train)
+preds_test <- predict.gam(mod_final, newdata = df_test)
+rsme_test <- sqrt(mean((preds_test - df_test$success_rate_log)^2))
+rsme_test
+summary(mod_final)
+mod_final$aic
+exp(2.23)
+
+plot(mod_final, se=TRUE, col="red")
+
+ggplot_prep <- preds_test %>% as_tibble
+ggplot_prep$actual <- df_test$success_rate_log
+colnames(ggplot_prep) <- c("predicted", "actual")
+plot <- ggplot(ggplot_prep, aes(y = predicted, x = actual))  + geom_point() + geom_abline(colour = "red")
+plot 
+?geom_abline
+```
+
+Test whether the dataset included in the study is biased:
+```{r}
+missing_function <- function(i) {
+  
+  url_website <- read_html(paste0("webpages thesis/project", i, ".html"))
+  #Find description
+  description1 <- xml_find_all(url_website, "//*[@id='content-wrap']/div/section[1]/div/div/div/div/div[1]/div/p") %>% html_text()
+  description1
+  #Find wordcount
+  text_df <- data_frame(linenumber = row_number(description1), text = description1)
+  text_df_df <- text_df %>% unnest_tokens(word, text)
+  text_df_df
+  Wordcount <- count(text_df_df) %>% as.numeric()
+  return(Wordcount)
+}
+
+
+#Load the webpages from file
+missing <- vector(length = length(kickstarter_df$link), mode = "list")
+
+for (i in 1:nrow(kickstarter_df)) {
+  missing[[i]] <- tryCatch(missing_function(i), error = function(e) list(message = e$message))
+            }
+    
+missing <- do.call(rbind, missing) 
+missing1 <- missing %>% as.data.frame()
+missing2 <- as.numeric(missing1$message)
+missing3 <- !is.na(missing2)
+missing4 <- missing3 %>% as.data.frame()
+colnames(missing4) <- c("included_in_study")
+
+kickstarter_kaggle_half <- filter(kickstarter_kaggle, usd_goal_real >= 5673.89, usd_goal_real <= 50000)
+
+analyze_links <- cbind(kickstarter_kaggle_half, missing4)
+
+launched <- kickstarter_kaggle_half$launched %>% as.character()
+launched1 <- launched %>% str_extract("^.{4}") %>% as.numeric()
+analyze_links1 <- cbind(analyze_links, launched1) %>% as_tibble()
+
+analyze_links_final <- dplyr::select(analyze_links1, usd_goal_real, launched1, included_in_study)
+analyze_links_final$included_in_study <- factor(analyze_links_final$included_in_study)
+
+analyze_links_final <- analyze_links_final %>% mutate(included_in_study = fct_recode(included_in_study, yes = "TRUE", no = "FALSE"))
+t_test_goal <- t.test(usd_goal_real ~ included_in_study, data = analyze_links_final)
+t_test_year <- t.test(launched1 ~ included_in_study, data = analyze_links_final)
+
+tbl <- table(analyze_links_final$launched_factor, analyze_links_final$included_in_study) 
+tbl
+```
+
+
